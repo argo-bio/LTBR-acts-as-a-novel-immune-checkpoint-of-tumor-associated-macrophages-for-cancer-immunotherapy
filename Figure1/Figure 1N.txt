@@ -1,0 +1,207 @@
+##LUAD scRNA-seq analyze
+rm(list = ls())
+gc()
+## read in data and metadata
+library(data.table)
+library(tidyverse)
+dat=fread(file = '../data/GSE131907_Lung_Cancer_normalized_log2TPM_matrix.txt',
+          sep = '\t', header = T, check.names = F)
+meta=fread(file = '../data/GSE131907_Lung_Cancer_cell_annotation.txt',
+          sep = '\t', header = T, check.names = F)
+
+dat =column_to_rownames(dat,"Index")
+
+tlung_meta=meta[meta$Sample_Origin%in%c('tLung'),]
+tlung_dat=dat[,tlung_meta$Index]
+## creat seurat object
+library(dplyr)
+library(Seurat)
+library(patchwork)
+tlung<- CreateSeuratObject(counts = tlung_dat, project = "tlung")
+save(tlung,tlung_meta,file = '../data/GSE131907_tlung.Rdata')
+load('../data/GSE131907_tlung.Rdata')
+## seurat workflow
+tlung <- NormalizeData(tlung)
+tlung <- FindVariableFeatures(tlung, selection.method = "vst", nfeatures = 2000)
+tlung <- ScaleData(tlung)
+tlung <- RunPCA(tlung, features = VariableFeatures(object = tlung))
+ElbowPlot(tlung)
+## need determing dimensionality
+tlung <- FindNeighbors(tlung, dims = 1:15)
+tlung <- FindClusters(tlung, resolution = 0.4)
+tlung <- RunUMAP(tlung, dims = 1:15)
+DimPlot(tlung, reduction = "umap")
+save(tlung,tlung_meta,file = '../data/tlung_normalize_d15_r4.Rdata')
+## markers
+load('../data/tlung_normalize_d15_r4.Rdata')
+markers=c('GATA2','MS4A2','KIT', #Mast cell
+          'LTBR',
+          'NFIL3','ID2','BATF3','IRF8','BST2','ESAM','ZBTB46','ITGAX','CLEC9A','CCL22','IDO1','ITGAE',#DC
+          'SIRPA','C1QA','C1QC','TREM2','FCGR1A','SIGLEC1','MRC1','CD68','ADGRE1','CSF1R','CD86','CD163','CX3CR1',#Macrophage
+          'CD14','FCGR3A','LYZ','CCR2','CSF3R','ITGAM','VCAN',#Monocyte
+          'SELL','CXCR2','CXCR1','FUT4','ELANE','S100A9','S100A8','CEACAM8','ARG1','CCR7',#Neutrophil
+          'IGHA2','IGHG3','IGHM','CD79A',#B cell
+          'KLRD1','GNLY','NKG7', #NK cell
+          'TRAC','CD3G','CD3E','CD3D', #T cell
+          'RAMP2','FLT1','CLDN5','PECAM1', #Endothelial cell
+          'COL1A2','COL1A1','THY1','DCN', #Fibroblast
+          'CDH1','KRT18','KRT19','EPCAM' #Epithelial cell
+)
+DotPlot(tlung, features = markers)+
+  theme(axis.text.x = element_text(angle = 90,vjust = 0.5, hjust=0.5),
+        text = element_text(size=20))
+ggsave('./marker_in_seurate_cluster.pdf',width = 35,height = 15)
+DimPlot(tlung, reduction = "umap",label = T)
+## annotation
+tlung$celltype=ifelse(tlung$seurat_clusters%in%c(8),'Mast cell',
+                      ifelse(tlung$seurat_clusters%in%c(2,16),'Macrophage',
+                             ifelse(tlung$seurat_clusters%in%c(6),'DC',
+                                    ifelse(tlung$seurat_clusters%in%c(3,11),'B cell',
+                                           ifelse(tlung$seurat_clusters%in%c(0,1,4,12),'T cell',
+                                                  ifelse(tlung$seurat_clusters%in%c(14),'NK cell',
+                                                         ifelse(tlung$seurat_clusters%in%c(17),'Endothelial',
+                                                                ifelse(tlung$seurat_clusters%in%c(10),'Fibroblast',
+                                                                       ifelse(tlung$seurat_clusters%in%c(13),'Neutrophil','Epithelial')))))))))
+p1=DimPlot(tlung, reduction = "umap",label = T,group.by = 'celltype')
+## only include immune cell and check genes
+genes=c('LTBR','MRC1','LTA','LTB','TNFSF14')
+table(genes%in%rownames(tlung))
+tlung_immune=tlung[,!tlung$celltype%in%c('Fibroblast','Endothelial','Epithelial')]
+p2=DimPlot(tlung_immune, reduction = "umap",label = T,group.by = 'celltype')
+p3=FeaturePlot(tlung_immune,features = genes,ncol = 1,max.cutoff =  1.5,min.cutoff = 0)
+
+ggsave(p2,filename = '../UMAP.pdf',width = 8,height = 6)
+ggsave(p3,filename = '../features.pdf',width = 8,height = 30)
+ggsave(p3,filename = '../features_max2.pdf',width = 8,height = 30)
+##sub macrophage group
+macro=tlung[,tlung$celltype%in%c('Macrophage')]
+macro <- NormalizeData(macro)
+macro <- FindVariableFeatures(macro, selection.method = "vst", nfeatures = 2000)
+macro <- ScaleData(macro)
+macro <- RunPCA(macro, features = VariableFeatures(object = tlung))
+ElbowPlot(macro)
+macro <- FindNeighbors(macro, dims = 1:11)
+macro <- FindClusters(macro, resolution = 0.4)
+macro <- RunUMAP(macro, dims = 1:11)
+p1=DimPlot(macro, reduction = "umap",label = T)
+p2=DotPlot(macro, features = 'LTBR')
+p3=FeaturePlot(macro,features = 'LTBR')
+p1 + p3 + p2
+
+macro$type=ifelse(macro$seurat_clusters%in%c(1,2,3,6),'LTBR -','LTBR +')
+p4=DimPlot(macro, reduction = "umap",label = T,group.by = 'type')
+
+(p1 + p3) | (p2 + p4)
+
+save(macro,file = '../data/macrophage_sc.Rdata')
+
+## df for macrophages
+df=as.data.frame(macro[['RNA']]@counts)
+df[1:4,1:4]
+table(df['LTBR',]==0)
+
+meta=t(df['LTBR',]) %>% as.data.frame()
+meta$type=ifelse(meta$LTBR==0,'LTBR -','LTBR +')
+meta$cell=rownames(meta)
+meta=meta[,2:3]
+
+table(gene$V1%in%rownames(df))
+data=df[gene$V1,] %>% t() %>% as.data.frame()
+range(data)
+data$type=meta$type
+
+save(data,meta,file = '../data/macrophages_data.Rdata')
+load('../data/macrophages_data.Rdata')
+library(devtools)
+library(ggunchained) 
+library(reshape2)  
+
+data_melt<-melt(data,id.vars = "type")
+gene=colnames(data)
+gene=gene[-34]
+
+plotlst <- list()
+for (i in gene) {
+  p <- ggplot(data_melt[data_melt$variable==i,],aes(x=i,y=value,fill=type))+
+    geom_split_violin()+
+    xlab(i)+
+    theme_bw()
+  plotlst[[i]] <- p
+}
+library(ggExtra)
+library(cowplot)
+allplot <- plot_grid(plotlist = plotlst,ncol = 6 ,align = "hv")
+hei = length(plotlst)/4*5
+ggsave(allplot,
+       filename = '../features_split_violin2.pdf',
+       limitsize = FALSE,
+       width = 35,
+       height = hei,
+       bg = 'white')
+
+##DEG
+group_list=meta$type
+group_list <- factor(group_list,levels = c("LTBR +","LTBR -"),ordered = F)
+exprSet <- df
+library(limma) 
+dat <- exprSet
+design=model.matrix(~factor( group_list ))
+fit=lmFit(dat,design)
+fit=eBayes(fit)
+options(digits = 4)
+topTable(fit,coef=2,adjust='BH')
+bp=function(g){
+  library(ggpubr)
+  df=data.frame(gene=g,stage=group_list)
+  p <- ggboxplot(df, x = "stage", y = "gene",
+                 color = "stage", palette = "jco",
+                 add = "jitter")
+  #  Add p-value
+  p + stat_compare_means()
+}
+deg=topTable(fit,coef=2,adjust='BH',number = Inf)
+#GSEA
+data=deg
+data$gene=rownames(data)
+data_sort <- data %>%
+  arrange(desc(logFC))
+gene_list <- data_sort$logFC
+names(gene_list) <- data_sort$gene
+head(gene_list)
+library(clusterProfiler)
+library(enrichplot)
+library(ggplot2)
+gmt <- read.gmt("../resource/Pathway_20230922.gmt")
+res <- GSEA(
+  gene_list,
+  TERM2GENE = gmt
+)
+library(GseaVis)
+gseaNb(object = res,
+       geneSetID = res@result[["ID"]],
+       subPlot = 2,
+       termWidth = 35,
+       #addGene = gene,
+       addPval = F,
+       pvalX = 0.05,pvalY = 0.05)
+
+#LTBR ligand expression
+genes=c('LTA', 'LTB', 'TNFSF14')
+FeaturePlot(tlung_immune,features = genes,ncol = 1,max.cutoff =  0.5,min.cutoff = 0)
+ggsave(filename = '../features_max_1.pdf',width = 8,height = 18)
+
+df=tlung_immune[genes,]
+exp=df@assays$RNA@counts %>% as.data.frame() %>% t() %>% as.data.frame()
+meta=df$celltype %>% as.data.frame()
+exp[1:4,1:4]
+table(rownames(meta)==rownames(exp))
+dat=cbind(exp,meta)
+colnames(dat)[4]='celltype'
+
+ggplot(dat,aes(x=celltype,y=LTA))+
+  geom_bar(stat="summary",fun=mean,position="dodge")+
+  stat_summary(fun.data = 'mean_sd', geom = "errorbar", width = 0.3)+
+  theme_bw()
+range(dat[,1:3])
+
+write.csv(dat,file = '../exp_LTA_LTB_TNFSF14.csv')

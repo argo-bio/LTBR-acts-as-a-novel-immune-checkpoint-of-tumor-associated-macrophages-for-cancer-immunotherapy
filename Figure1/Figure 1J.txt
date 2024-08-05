@@ -1,0 +1,83 @@
+#TCGA-LUAD RNA-seq analyze
+library(tidyverse)
+library(ggplot2)
+library(patchwork)
+library(pheatmap)
+library(ggplotify)
+library(survival)
+library(survminer)
+library(timeROC)
+library(corrplot)
+library(RColorBrewer)
+library(grDevices)
+library(Rmisc) 
+library(ggcorrplot)
+library(circlize)
+library(ComplexHeatmap)
+library(readr)
+
+##TCGA-LUAD RNA-Seq data was downloaded from: https://xenabrowser.net/datapages/
+
+TCGA_fpkm <- read_tsv('./Data/Xena/TCGA-LUAD.htseq_fpkm.tsv.gz')
+TCGA_fpkm=column_to_rownames(TCGA_fpkm,'Ensembl_ID')
+##gene symbol to ensembl ID convert
+gtf_v22=read.table('./Data/Xena/gencode.v22.annotation.gene.probeMap',header = T)
+ids=gtf_v22[match(rownames(TCGA_fpkm),gtf_v22$id),1:2]
+colnames(ids)=c('probe_id','symbol')  
+ids=ids[ids$symbol != '',]
+dat=TCGA_fpkm
+ids=ids[ids$probe_id %in%  rownames(dat),]
+dat=dat[ids$probe_id,]
+ids$median=apply(dat,1,median)
+ids=ids[order(ids$symbol,ids$median,decreasing = T),]
+ids=ids[!duplicated(ids$symbol),]
+dat=dat[ids$probe_id,]
+rownames(dat)=ids$symbol
+phenotype <- read_tsv('./Data/Xena/TCGA-LUAD.GDC_phenotype.tsv')
+os <- read_tsv('./Data/Xena/TCGA-LUAD.survival.tsv')
+rm(gtf_v22,ids,TCGA_fpkm)
+
+colnames(phenotype)[1]='sample'
+meta=merge(os,phenotype,by = 'sample')
+
+colnames(dat) %in% meta$sample %>% table()
+meta$sample %in% colnames(dat) %>% table()
+
+# Figure S4F: correlation between LTBR and its ligend
+df = dat[c('LTBR','LTA','LTB','TNFSF14'),]
+df <- df %>% t() %>% as.data.frame()
+
+
+plotlst <- list()
+library(ggExtra)
+library(cowplot)
+for (i in colnames(df)[2:4]) {
+  p <- ggplot(df,aes_string(x = 'LTBR',y = i)) +
+    geom_point(size = 2,color = 'black',alpha = 0.5) +
+    theme_bw() +
+    theme(axis.title = element_text(size = 16),
+          axis.text = element_text(size = 14),
+          axis.ticks.length = unit(0.25,'cm'),
+          axis.ticks = element_line(size = 1),
+          panel.border = element_rect(size = 1.5),
+          panel.grid = element_blank()
+    ) +
+    geom_smooth(method = 'lm',color = 'blue',size = 1.5,fill = 'grey') +
+    stat_cor(method = "pearson",digits = 3,size=6)
+  p1 <- ggMarginal(p,type = "histogram",
+                   xparams = list(binwidth = 0.004, fill = "#B3E283",size = .7),
+                   yparams = list(binwidth = 0.2, fill = "#8AB6D6",size = .7))
+  plotlst[[i]] <- p1
+}
+allplot <- plot_grid(plotlist = plotlst,ncol = 1 ,align = "hv")
+hei = length(plotlst)/4*5
+
+ggsave(allplot,
+       filename = './LTBR.cor.png',
+       limitsize = FALSE,
+       width = 7,
+       height = 21,
+       bg = 'white')
+
+
+
